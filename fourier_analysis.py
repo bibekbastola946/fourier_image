@@ -1,160 +1,195 @@
-# First, install required packages:
-# pip install pandas numpy scipy Pillow requests matplotlib tqdm
-
-import pandas as pd
 import numpy as np
-from scipy.fft import fft2, fftshift
+import pandas as pd
+from scipy.fft import fft2, fftshift, ifft2
 from PIL import Image
 import requests
 from io import BytesIO
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+from scipy import signal
 
 
 def load_and_process_image(url):
-    """
-    Load image from URL and convert to grayscale using PIL
-    """
+    """Load image from URL and convert to grayscale"""
     response = requests.get(url)
-    img = Image.open(BytesIO(response.content)).convert('L')  # 'L' mode means grayscale
-    return np.array(img)
+    img = Image.open(BytesIO(response.content)).convert('L')
+    return np.array(img, dtype=float)
 
 
-def compute_fourier_features(image):
+def compute_enhanced_fourier_features(image):
     """
-    Compute 2D Fourier transform and extract relevant features
+    Compute comprehensive Fourier transform features including frequency analysis,
+    power spectrum, and various spectral properties
     """
     # Compute 2D FFT
     f_transform = fft2(image)
     f_shift = fftshift(f_transform)
     magnitude_spectrum = np.abs(f_shift)
+    power_spectrum = np.square(magnitude_spectrum)
+    phase_spectrum = np.angle(f_shift)
 
-    # Extract features from the spectrum
-    # Log scale for better handling of magnitude variations
+    # Compute log spectrum for visualization
     log_spectrum = np.log1p(magnitude_spectrum)
 
+    # Calculate radial frequency profile
+    rows, cols = image.shape
+    center_row, center_col = rows // 2, cols // 2
+    y, x = np.ogrid[-center_row:rows - center_row, -center_col:cols - center_col]
+    radius = np.sqrt(x * x + y * y)
+    radius_int = radius.astype(int)
+
+    # Radial profile of power spectrum
+    radial_profile = np.bincount(radius_int.ravel(), power_spectrum.ravel())
+    radial_profile = radial_profile / np.bincount(radius_int.ravel())
+
+    # Frequency bands analysis
+    total_power = np.sum(power_spectrum)
+    low_freq_mask = radius < min(rows, cols) * 0.1
+    mid_freq_mask = (radius >= min(rows, cols) * 0.1) & (radius < min(rows, cols) * 0.5)
+    high_freq_mask = radius >= min(rows, cols) * 0.5
+
+    # Directional analysis
+    angles = np.rad2deg(np.arctan2(y, x))
+    angles = np.where(angles < 0, angles + 360, angles)
+    angle_bins = np.arange(0, 370, 10)
+    direction_profile = np.histogram(angles, bins=angle_bins, weights=power_spectrum)[0]
+
     features = {
+        # Basic spectral features
         'mean_magnitude': np.mean(magnitude_spectrum),
         'std_magnitude': np.std(magnitude_spectrum),
         'max_magnitude': np.max(magnitude_spectrum),
-        'energy': np.sum(np.square(magnitude_spectrum)),
-        'low_freq_energy': np.sum(np.square(magnitude_spectrum[:image.shape[0] // 4, :image.shape[1] // 4])),
-        'high_freq_energy': np.sum(np.square(magnitude_spectrum[3 * image.shape[0] // 4:, 3 * image.shape[1] // 4:])),
-        'freq_ratio': np.sum(np.square(magnitude_spectrum[:image.shape[0] // 4, :image.shape[1] // 4])) /
-                      np.sum(np.square(magnitude_spectrum[3 * image.shape[0] // 4:, 3 * image.shape[1] // 4:]))
+        'total_power': total_power,
+
+        # Frequency band energies
+        'low_freq_power': np.sum(power_spectrum * low_freq_mask) / total_power,
+        'mid_freq_power': np.sum(power_spectrum * mid_freq_mask) / total_power,
+        'high_freq_power': np.sum(power_spectrum * high_freq_mask) / total_power,
+
+        # Phase statistics
+        'phase_mean': np.mean(phase_spectrum),
+        'phase_std': np.std(phase_spectrum),
+
+        # Spectral moments
+        'spectral_centroid': np.sum(radius * power_spectrum) / total_power,
+        'spectral_spread': np.sqrt(
+            np.sum(np.square(radius - np.sum(radius * power_spectrum) / total_power) * power_spectrum) / total_power),
+
+        # Directional features
+        'directional_mean': np.average(np.arange(len(direction_profile)), weights=direction_profile),
+        'directional_std': np.sqrt(np.average((np.arange(len(direction_profile)) - np.average(
+            np.arange(len(direction_profile)), weights=direction_profile)) ** 2, weights=direction_profile)),
+
+        # Texture features
+        'entropy': -np.sum(power_spectrum * np.log2(power_spectrum + 1e-10)) / np.log2(power_spectrum.size),
+        'contrast': np.sum(radius * power_spectrum) / total_power
     }
 
-    return features, log_spectrum
+    return features, {
+        'magnitude_spectrum': magnitude_spectrum,
+        'power_spectrum': power_spectrum,
+        'phase_spectrum': phase_spectrum,
+        'log_spectrum': log_spectrum,
+        'radial_profile': radial_profile,
+        'direction_profile': direction_profile,
+        'angle_bins': angle_bins[:-1]
+    }
+
+
+def visualize_spectral_analysis(image, spectra, save_prefix='spectral'):
+    """Create comprehensive visualizations of the spectral analysis"""
+    # Create figure with subplots
+    fig = plt.figure(figsize=(20, 10))
+    gs = fig.add_gridspec(2, 4)
+
+    # Original image
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax1.imshow(image, cmap='gray')
+    ax1.set_title('Original Image')
+    ax1.axis('off')
+
+    # Magnitude spectrum
+    ax2 = fig.add_subplot(gs[0, 1])
+    ax2.imshow(np.log1p(spectra['magnitude_spectrum']), cmap='viridis')
+    ax2.set_title('Magnitude Spectrum (log scale)')
+    ax2.axis('off')
+
+    # Phase spectrum
+    ax3 = fig.add_subplot(gs[0, 2])
+    ax3.imshow(spectra['phase_spectrum'], cmap='hsv')
+    ax3.set_title('Phase Spectrum')
+    ax3.axis('off')
+
+    # Power spectrum
+    ax4 = fig.add_subplot(gs[0, 3])
+    ax4.imshow(np.log1p(spectra['power_spectrum']), cmap='magma')
+    ax4.set_title('Power Spectrum (log scale)')
+    ax4.axis('off')
+
+    # Radial profile
+    ax5 = fig.add_subplot(gs[1, 0:2])
+    ax5.plot(spectra['radial_profile'])
+    ax5.set_title('Radial Frequency Profile')
+    ax5.set_xlabel('Radius (pixels)')
+    ax5.set_ylabel('Average Power')
+    ax5.grid(True)
+
+    # Directional profile
+    ax6 = fig.add_subplot(gs[1, 2:], projection='polar')
+    ax6.plot(np.deg2rad(spectra['angle_bins']), spectra['direction_profile'])
+    ax6.set_title('Directional Power Distribution')
+
+    plt.tight_layout()
+    plt.savefig(f'{save_prefix}_analysis.png')
+    plt.close()
 
 
 def analyze_equipment_images(csv_path, max_images=100):
-    """
-    Analyze first 100 images in the dataset and correlate with wear percentage
-    """
-    # Read the CSV file
-    df = pd.read_csv(csv_path)
-
-    # Limit to first max_images
-    df = df.head(max_images)
-
-    # Initialize lists to store results
+    """Analyze images with enhanced Fourier features"""
+    df = pd.read_csv(csv_path).head(max_images)
     all_features = []
     equipment_ids = []
     wear_percentages = []
-    failed_images = []
 
-    # Use tqdm for progress bar
     for idx, row in tqdm(df.iterrows(), total=len(df), desc="Processing images"):
         try:
-            # Load and process image
             img = load_and_process_image(row['ImageURL'])
+            features, spectra = compute_enhanced_fourier_features(img)
 
-            # Compute Fourier features
-            features, _ = compute_fourier_features(img)
+            # Save spectral analysis for first few images
+            if idx < 5:
+                visualize_spectral_analysis(img, spectra, f'spectral_analysis_{row["EquipmentId"]}')
 
-            # Store results
             all_features.append(features)
             equipment_ids.append(row['EquipmentId'])
             wear_percentages.append(row['PercentWear'])
 
         except Exception as e:
-            print(f"\nError processing image for EquipmentId {row['EquipmentId']}: {str(e)}")
-            failed_images.append(row['EquipmentId'])
+            print(f"\nError processing image {row['EquipmentId']}: {str(e)}")
 
-    # Convert to DataFrame
     results_df = pd.DataFrame(all_features)
     results_df['EquipmentId'] = equipment_ids
     results_df['PercentWear'] = wear_percentages
 
-    # Compute correlations
-    correlations = results_df.corr()['PercentWear'].sort_values(ascending=False)
-
-    # Print summary
-    print(f"\nProcessed {len(results_df)} images successfully")
-    if failed_images:
-        print(f"Failed to process {len(failed_images)} images: {failed_images}")
-
-    return results_df, correlations
+    # Save results
+    results_df.to_csv('enhanced_fourier_analysis.csv', index=False)
+    return results_df
 
 
-def visualize_spectrum(image_url, save_path=None):
-    """
-    Create visualization of original image and its Fourier spectrum
-    """
-    # Load image
-    img = load_and_process_image(image_url)
-
-    # Compute spectrum
-    _, log_spectrum = compute_fourier_features(img)
-
-    # Create visualization
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
-
-    ax1.imshow(img, cmap='gray')
-    ax1.set_title('Original Image')
-    ax1.axis('off')
-
-    ax2.imshow(log_spectrum, cmap='viridis')
-    ax2.set_title('Fourier Spectrum (Log Scale)')
-    ax2.axis('off')
-
-    plt.tight_layout()
-
-    if save_path:
-        plt.savefig(save_path)
-    plt.close()
-
-
-# Example usage
 if __name__ == "__main__":
-    # First install required packages if not already installed
-    try:
-        import pip
-
-        required_packages = ['pandas', 'numpy', 'scipy', 'Pillow', 'requests', 'matplotlib', 'tqdm']
-        for package in required_packages:
-            try:
-                __import__(package)
-            except ImportError:
-                print(f"Installing {package}...")
-                pip.main(['install', package])
-    except Exception as e:
-        print(f"Error installing packages: {str(e)}")
-        print("Please manually run: pip install pandas numpy scipy Pillow requests matplotlib tqdm")
-
     csv_path = 'image_metadata.csv'
+    results = analyze_equipment_images(csv_path)
 
-    # Process first 100 images
-    results_df, correlations = analyze_equipment_images(csv_path, max_images=100)
-
-    print("\nCorrelations with Wear Percentage:")
-    print(correlations)
-
-    # Save results to CSV
-    results_df.to_csv('fourier_analysis_results.csv', index=False)
-    print("\nResults saved to 'fourier_analysis_results.csv'")
-
-    # Visualize first image as example
-    first_image_url = pd.read_csv(csv_path)['ImageURL'].iloc[0]
-    visualize_spectrum(first_image_url, 'fourier_analysis_example.png')
-    print("Example visualization saved as 'fourier_analysis_example.png'")
+    print("\nAnalysis complete! New features include:")
+    print("- Frequency band power distribution")
+    print("- Phase statistics")
+    print("- Spectral moments")
+    print("- Directional analysis")
+    print("- Texture features")
+    print("\nGenerated visualizations for the first 5 images show:")
+    print("- Original image")
+    print("- Magnitude spectrum")
+    print("- Phase spectrum")
+    print("- Power spectrum")
+    print("- Radial frequency profile")
+    print("- Directional power distribution")

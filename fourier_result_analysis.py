@@ -1,83 +1,67 @@
 import pandas as pd
-import matplotlib.pyplot as plt
 import seaborn as sns
+import matplotlib.pyplot as plt
 from scipy import stats
 import numpy as np
 
 
-def analyze_fourier_results(csv_path='fourier_analysis_results.csv'):
-    # Read the results
+def analyze_enhanced_results(csv_path='enhanced_fourier_analysis.csv'):
     df = pd.read_csv(csv_path)
 
-    # 1. Basic Statistical Summary
-    print("Statistical Summary of Features:")
-    print(df.describe())
+    # 1. Feature groups analysis
+    feature_groups = {
+        'Basic Spectral': ['mean_magnitude', 'std_magnitude', 'max_magnitude', 'total_power'],
+        'Frequency Bands': ['low_freq_power', 'mid_freq_power', 'high_freq_power'],
+        'Phase': ['phase_mean', 'phase_std'],
+        'Spectral Shape': ['spectral_centroid', 'spectral_spread'],
+        'Directional': ['directional_mean', 'directional_std'],
+        'Texture': ['entropy', 'contrast']
+    }
 
-    # 2. Correlation Analysis with Heatmap
-    plt.figure(figsize=(12, 8))
-    sns.heatmap(df.corr(), annot=True, cmap='coolwarm', center=0)
-    plt.title('Correlation Matrix of Fourier Features')
-    plt.tight_layout()
-    plt.savefig('correlation_heatmap.png')
-    plt.close()
+    # Create correlation plots for each feature group
+    for group_name, features in feature_groups.items():
+        plt.figure(figsize=(10, 6))
 
-    # 3. Scatter plots of top correlated features with PercentWear
-    correlations = df.corr()['PercentWear'].sort_values(ascending=False)
-    top_features = correlations[1:4].index  # Skip PercentWear itself
+        # Get correlations with wear percentage
+        correlations = df[features + ['PercentWear']].corr()['PercentWear'].drop('PercentWear')
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    for i, feature in enumerate(top_features):
-        sns.scatterplot(data=df, x=feature, y='PercentWear', ax=axes[i])
-        axes[i].set_title(f'{feature} vs PercentWear')
+        # Create bar plot
+        sns.barplot(x=correlations.index, y=correlations.values)
+        plt.title(f'{group_name} Features - Correlation with Wear')
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        plt.savefig(f'correlation_{group_name.lower().replace(" ", "_")}.png')
+        plt.close()
 
-        # Add trend line
-        z = np.polyfit(df[feature], df['PercentWear'], 1)
-        p = np.poly1d(z)
-        axes[i].plot(df[feature], p(df[feature]), "r--", alpha=0.8)
+    # 2. Feature importance analysis
+    all_correlations = df.corr()['PercentWear'].sort_values(ascending=False)
 
-        # Calculate and display R-squared
-        r2 = stats.pearsonr(df[feature], df['PercentWear'])[0] ** 2
-        axes[i].text(0.05, 0.95, f'R² = {r2:.3f}',
-                     transform=axes[i].transAxes,
-                     bbox=dict(facecolor='white', alpha=0.8))
+    print("Top 5 Most Predictive Features:")
+    print(all_correlations[1:6])  # Skip PercentWear itself
 
-    plt.tight_layout()
-    plt.savefig('top_correlations.png')
-    plt.close()
-
-    # 4. Feature importance analysis
-    print("\nFeature Correlations with Wear Percentage:")
-    for feature, corr in correlations.items():
-        print(f"{feature}: {corr:.3f}")
-
-    # 5. Wear percentage distribution
+    # 3. Frequency band analysis
     plt.figure(figsize=(10, 6))
-    sns.histplot(data=df, x='PercentWear', bins=20)
-    plt.title('Distribution of Wear Percentages')
-    plt.xlabel('Wear Percentage')
-    plt.ylabel('Count')
-    plt.savefig('wear_distribution.png')
+    freq_bands = ['low_freq_power', 'mid_freq_power', 'high_freq_power']
+    sns.boxplot(data=df[freq_bands])
+    plt.title('Distribution of Power Across Frequency Bands')
+    plt.tight_layout()
+    plt.savefig('frequency_bands_distribution.png')
     plt.close()
 
-    # 6. Identify potential outliers
-    print("\nPotential Outliers (> 2 standard deviations from mean):")
-    for column in df.select_dtypes(include=[np.number]).columns:
-        mean = df[column].mean()
-        std = df[column].std()
-        outliers = df[abs(df[column] - mean) > 2 * std]
-        if len(outliers) > 0:
-            print(f"\n{column}:")
-            print(f"Number of outliers: {len(outliers)}")
-            print(f"Outlier values: {outliers[column].values}")
+    # 4. Phase analysis
+    plt.figure(figsize=(10, 6))
+    sns.scatterplot(data=df, x='phase_mean', y='phase_std', hue='PercentWear', size='total_power')
+    plt.title('Phase Characteristics vs Wear')
+    plt.tight_layout()
+    plt.savefig('phase_analysis.png')
+    plt.close()
 
     return df
 
 
 if __name__ == "__main__":
-    # Analyze the results
-    df = analyze_fourier_results()
-
-    print("\nAnalysis complete! Generated visualizations:")
-    print("1. correlation_heatmap.png - Shows correlations between all features")
-    print("2. top_correlations.png - Scatter plots of top correlated features with wear percentage")
-    print("3. wear_distribution.png - Distribution of wear percentages")
+    results = analyze_enhanced_results()
+    print("\nAnalysis complete! Generated visualizations for:")
+    print("- Correlation plots for each feature group")
+    print("- Frequency band distribution")
+    print("- Phase characteristics")
